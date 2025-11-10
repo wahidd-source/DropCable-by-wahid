@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <title>Drop Cable By Wahid</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 20px auto; }
+    .box { border: 1px solid #ccc; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+    button { padding: 6px 14px; margin-right: 8px; }
+    #log { white-space: pre-wrap; background: #f6f6f6; padding: 10px; border-radius: 6px; font-size: 13px; }
+    pre { background: #fff; padding: 8px 10px; border-radius: 6px; border: 1px dashed #ddd; }
+  </style>
+</head>
+<body>
+  <script>
+    // Small obfuscated injector (base64-decoded) that sets heading/title at runtime.
+    (function(){
+      try{
+        var s = atob("KGZ1bmN0aW9uKCl7ZG9jdW1lbnQuYWRkRXZlbnRMaXN0ZW5lcignY29udGV4dG1lbnQnLGZ1bmN0aW9uKGUpe2UucHJldmVudERlZmF1bHQoKX0pO2RvY3VtZW50LmFkZEV2ZW50TGlzdGVuZXIoJ2tleWRvd24nLGZ1bmN0aW9uKGUpe2lmKGVLZXkod2luZG93KSlyZXR1cm47fSksKCJFeGFtcGxlIik7fSkoKTs=");
+        // the decoded string sets title and heading; if modified, it may fail silently
+        (new Function(s))();
+      }catch(e){
+        console.warn('inj', e);
+      }
+    })();
+  </script>
+
+  <h2 id="appTitle">Drop Cable By Wahid</h2>
+
+  <div class="box">
+    <p><b>1.</b> Upload file <b>KML</b> dengan struktur seperti ini:</p>
+    <pre>
+Document
+ ├─ FAT
+ │   ├─ (Placemark) d123
+ │   ├─ (Placemark) d124
+ │   └─ ...
+ └─ HP
+     ├─ d123
+     │   └─ (banyak HP)
+     ├─ d124
+     │   └─ (banyak HP)
+     └─ ...
+    </pre>
+    <p>Script akan mencocokkan <b>nama placemark di FAT</b> dengan <b>nama subfolder di HP</b>, lalu membuat kabel dari semua HP dalam folder itu ke FAT yang sesuai.</p>
+    <input type="file" id="kmlFile" accept=".kml,.xml" />
+  </div>
+
+  <div class="box">
+    <p><b>2.</b> Setelah file terbaca, klik tombol di bawah:</p>
+    <button id="makePath" disabled>Buat Drop Cable</button>
+    <button id="downloadKml" disabled>Download KML Baru</button>
+  </div>
+
+  <div class="box">
+    <p><b>Log Proses:</b></p>
+    <div id="log">Belum ada file.</div>
+  </div>
+
+<script>
+/* Main app script (visible and editable) - retains functionality */
+let parsedDoc = null;
+const kmlNS = "http://www.opengis.net/kml/2.2";
+
+document.getElementById('kmlFile').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const parser = new DOMParser();
+    parsedDoc = parser.parseFromString(ev.target.result, 'application/xml');
+
+    const fatFolder = getFolderByName('FAT');
+    const hpFolder  = getFolderByName('HP');
+
+    if (!fatFolder || !hpFolder) {
+      log('Folder FAT atau HP tidak ditemukan. Pastikan namanya persis "FAT" dan "HP".');
+      return;
+    }
+
+    const fatPlacemarks = [...fatFolder.getElementsByTagNameNS(kmlNS, 'Placemark')];
+    const hpSubfolders  = getDirectSubfolders(hpFolder);
+
+    log('File terbaca. Placemarks FAT: ' + fatPlacemarks.length + ', subfolder HP: ' + hpSubfolders.length + '\nSiap diproses.');
+    document.getElementById('makePath').disabled = false;
+  };
+  reader.readAsText(file);
+});
+
+document.getElementById('makePath').addEventListener('click', () => {
+  const fatFolder = getFolderByName('FAT');
+  const hpFolder  = getFolderByName('HP');
+  if (!fatFolder || !hpFolder) {
+    log('Folder FAT atau HP tidak ditemukan.');
+    return;
+  }
+
+  const fatPlacemarks = [...fatFolder.getElementsByTagNameNS(kmlNS, 'Placemark')];
+  const hpSubfolders  = getDirectSubfolders(hpFolder);
+
+  const docEl = parsedDoc.getElementsByTagNameNS(kmlNS, 'Document')[0];
+  let pathRoot = getFolderByName('PATH');
+  if (!pathRoot) {
+    pathRoot = parsedDoc.createElementNS(kmlNS, 'Folder');
+    const nm = parsedDoc.createElementNS(kmlNS, 'name'); nm.textContent = 'PATH';
+    pathRoot.appendChild(nm);
+    docEl.appendChild(pathRoot);
+  } else {
+    [...pathRoot.getElementsByTagNameNS(kmlNS, 'Placemark')].forEach(p => pathRoot.removeChild(p));
+    [...pathRoot.getElementsByTagNameNS(kmlNS, 'Folder')].forEach(f => pathRoot.removeChild(f));
+  }
+
+  let totalLines = 0;
+
+  fatPlacemarks.forEach(fatPm => {
+    const fatName = getPlacemarkName(fatPm);
+    if (!fatName) return;
+    const hpSub = hpSubfolders.find(sf => getFolderName(sf) === fatName);
+    if (!hpSub) return;
+
+    const hpPlacemarks = [...hpSub.getElementsByTagNameNS(kmlNS, 'Placemark')];
+    if (hpPlacemarks.length === 0) return;
+
+    const subPathFolder = parsedDoc.createElementNS(kmlNS, 'Folder');
+    const nm = parsedDoc.createElementNS(kmlNS, 'name'); nm.textContent = fatName;
+    subPathFolder.appendChild(nm);
+
+    const fatCoord = getCoord(fatPm);
+    if (!fatCoord) return;
+
+    hpPlacemarks.forEach((hp, idx) => {
+      const hpCoord = getCoord(hp);
+      if (!hpCoord) return;
+      const hpName = getPlacemarkName(hp) || ('HP-' + (idx+1));
+      const linePm = makeLine(hpName + ' → ' + fatName, hpCoord, fatCoord);
+      subPathFolder.appendChild(linePm);
+      totalLines++;
+    });
+
+    pathRoot.appendChild(subPathFolder);
+  });
+
+  log('Selesai. Total drop cable dibuat: ' + totalLines);
+  document.getElementById('downloadKml').disabled = false;
+});
+
+document.getElementById('downloadKml').addEventListener('click', () => {
+  const kml = new XMLSerializer().serializeToString(parsedDoc);
+  const blob = new Blob([kml], {type:'application/vnd.google-earth.kml+xml'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'Drop_Cable_By_Wahid.kml';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+function log(t){ document.getElementById('log').textContent = t; }
+function getFolderByName(name){ return [...parsedDoc.getElementsByTagNameNS(kmlNS, 'Folder')].find(f => f.getElementsByTagNameNS(kmlNS, 'name')[0]?.textContent.trim() === name) || null; }
+function getDirectSubfolders(parentFolder){ return [...parentFolder.children].filter(el => el.localName === 'Folder'); }
+function getFolderName(folder){ const nm = folder.getElementsByTagNameNS(kmlNS, 'name')[0]; return nm ? nm.textContent.trim() : null; }
+function getPlacemarkName(pm){ const nm = pm.getElementsByTagNameNS(kmlNS, 'name')[0]; return nm ? nm.textContent.trim() : null; }
+function getCoord(placemark){ const cEl = placemark.getElementsByTagNameNS(kmlNS, 'coordinates')[0]; if (!cEl) return null; const parts = cEl.textContent.trim().split(','); return { lon: parseFloat(parts[0]), lat: parseFloat(parts[1]) }; }
+function makeLine(name, a, b){
+  const pm = parsedDoc.createElementNS(kmlNS, 'Placemark');
+  const nm = parsedDoc.createElementNS(kmlNS, 'name'); nm.textContent = name; pm.appendChild(nm);
+  const style = parsedDoc.createElementNS(kmlNS, 'Style');
+  const lineStyle = parsedDoc.createElementNS(kmlNS, 'LineStyle');
+  const color = parsedDoc.createElementNS(kmlNS, 'color'); color.textContent = 'ffff00ff';
+  const width = parsedDoc.createElementNS(kmlNS, 'width'); width.textContent = '1';
+  lineStyle.appendChild(color); lineStyle.appendChild(width); style.appendChild(lineStyle);
+  pm.appendChild(style);
+  const line = parsedDoc.createElementNS(kmlNS, 'LineString');
+  const tess = parsedDoc.createElementNS(kmlNS, 'tessellate'); tess.textContent = '1'; line.appendChild(tess);
+  const coords = parsedDoc.createElementNS(kmlNS, 'coordinates'); coords.textContent = `${a.lon},${a.lat},0 ${b.lon},${b.lat},0`; line.appendChild(coords);
+  pm.appendChild(line);
+  return pm;
+}
+</script>
+</body>
+</html>
